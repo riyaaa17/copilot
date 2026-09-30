@@ -70,3 +70,7 @@ class AnomalyFlag(SQLModel, table=True):
     score: float
     explanation: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
+class AppMeta(SQLModel, table=True):
+    """Small key-value store: as_of date, opening balance, etc."""
+    key: str = Field(primary_key=True)
+    value: str
