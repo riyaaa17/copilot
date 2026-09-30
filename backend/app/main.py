@@ -2,8 +2,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import analytics, ingest
 
+from app.api import analytics, forecast, ingest
 from app.config import get_settings
 from app.db import init_db
 
@@ -25,6 +25,8 @@ app.add_middleware(
 )
 app.include_router(ingest.router)
 app.include_router(analytics.router)
+app.include_router(forecast.router)
+
 
 @app.get("/health")
 def health() -> dict:
