@@ -57,11 +57,17 @@ class BankTransaction(SQLModel, table=True):
 
 
 class EmailDraft(SQLModel, table=True):
-    """Human-in-the-loop: agents only write drafts; a person approves."""
+    """Human-in-the-loop: agents only write drafts; a person approves. Nothing is auto-sent."""
     id: int | None = Field(default=None, primary_key=True)
-    invoice_id: int = Field(foreign_key="invoice.id", index=True)
+    counterparty_id: int = Field(foreign_key="counterparty.id", index=True)
+    to_email: str | None = None
     subject: str
     body: str
+    tone: str = "friendly"  # friendly | firm | urgent
+    invoice_ids: str = ""  # comma-separated invoice ids covered by this email
+    total_amount: float = 0.0
+    source: str = "template"  # llm | template
+    warnings: str | None = None  # why an LLM draft was rejected, if it was
     status: DraftStatus = DraftStatus.DRAFT
     created_at: datetime = Field(default_factory=utcnow)
     reviewed_at: datetime | None = None
@@ -84,3 +90,13 @@ class AppMeta(SQLModel, table=True):
     """Small key-value store: as_of date, opening balance, etc."""
     key: str = Field(primary_key=True)
     value: str
+
+class Briefing(SQLModel, table=True):
+    """A saved weekly CFO briefing."""
+    id: int | None = Field(default=None, primary_key=True)
+    as_of: date
+    markdown: str
+    data_json: str  # every figure behind the briefing, for audit
+    source: str = "template"  # llm | template (how the two narrative paragraphs were written)
+    warnings: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
