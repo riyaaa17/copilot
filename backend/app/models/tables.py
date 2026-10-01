@@ -1,6 +1,10 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 from sqlmodel import Field, SQLModel
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class InvoiceType(str, Enum):
@@ -59,17 +63,23 @@ class EmailDraft(SQLModel, table=True):
     subject: str
     body: str
     status: DraftStatus = DraftStatus.DRAFT
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
     reviewed_at: datetime | None = None
 
 
 class AnomalyFlag(SQLModel, table=True):
+    """A suspicious invoice. A person reviews it: open -> confirmed or dismissed."""
     id: int | None = Field(default=None, primary_key=True)
-    invoice_id: int | None = Field(default=None, foreign_key="invoice.id")
-    kind: str  # duplicate | outlier | suspicious
-    score: float
+    invoice_id: int | None = Field(default=None, foreign_key="invoice.id", index=True)
+    related_invoice_id: int | None = Field(default=None, foreign_key="invoice.id")
+    kind: str  # duplicate | outlier
+    score: float  # confidence, 0 to 1
+    severity: str = "medium"  # medium | high
     explanation: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    status: str = "open"  # open | confirmed | dismissed
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class AppMeta(SQLModel, table=True):
     """Small key-value store: as_of date, opening balance, etc."""
     key: str = Field(primary_key=True)

@@ -32,9 +32,11 @@ def load_bank(session: Session) -> pd.DataFrame:
     return df
 
 
-def flagged_invoice_ids(session: Session) -> set[int]:
-    """Invoices the Anomaly Agent flagged; the forecast should not learn from them."""
-    return {i for i in session.exec(select(AnomalyFlag.invoice_id)).all() if i is not None}
+def flagged_invoice_ids(session: Session, kind: str) -> set[int]:
+    """Invoice ids flagged by the Anomaly Agent as `kind`, unless a person dismissed the flag."""
+    q = select(AnomalyFlag.invoice_id).where(AnomalyFlag.kind == kind,
+                                             AnomalyFlag.status != "dismissed")
+    return {i for i in session.exec(q).all() if i is not None}
 
 
 # ---------- payment-delay distributions ----------
@@ -199,9 +201,14 @@ class Forecast:
 
 
 def run_forecast(inv: pd.DataFrame, bank: pd.DataFrame, as_of: date, opening_cash: float,
-                 n_sims: int = 1000, seed: int = 42, exclude_ids=frozenset()) -> Forecast:
+                 n_sims: int = 1000, seed: int = 42, exclude_ids=frozenset(),
+                 learn_exclude_ids=frozenset()) -> Forecast:
+    """exclude_ids: invoices that are not real (duplicates); removed everywhere.
+    learn_exclude_ids: suspicious but possibly real (outliers); they stay in open receivables
+    and payables, but are not used to learn typical invoice sizes for future billings."""
     rng = np.random.default_rng(seed)
     inv = inv[~inv["id"].isin(exclude_ids)]
+    learn = inv[~inv["id"].isin(learn_exclude_ids)]
     S = n_sims
 
     per_ar, port_ar = _build_dists(inv, "AR", as_of)
@@ -211,9 +218,9 @@ def run_forecast(inv: pd.DataFrame, bank: pd.DataFrame, as_of: date, opening_cas
 
     comps: dict[str, np.ndarray] = {
         "Collections: open invoices": ar_open,
-        "Collections: new billings": _simulate_new(rng, inv, "AR", as_of, S, per_ar, port_ar),
+        "Collections: new billings": _simulate_new(rng, learn, "AR", as_of, S, per_ar, port_ar),
         "Vendor payments: open bills": -ap_open,
-        "Vendor payments: new bills": -_simulate_new(rng, inv, "AP", as_of, S, per_ap, port_ap),
+        "Vendor payments: new bills": -_simulate_new(rng, learn, "AP", as_of, S, per_ap, port_ap),
     }
     comps.update(_simulate_recurring(rng, bank, as_of, S))
 
@@ -253,7 +260,8 @@ def run_forecast(inv: pd.DataFrame, bank: pd.DataFrame, as_of: date, opening_cas
 
 # ---------- backtest ----------
 def backtest(inv: pd.DataFrame, bank: pd.DataFrame, opening_balance: float, as_of: date,
-             n_sims: int = 500, seed: int = 7) -> dict:
+             n_sims: int = 500, seed: int = 7, exclude_ids=frozenset(),
+             learn_exclude_ids=frozenset()) -> dict:
     """Rewind to 13 weeks ago, forecast using only what was known then, compare to reality."""
     cutoff = as_of - timedelta(days=HORIZON_DAYS)
     c = pd.Timestamp(cutoff)
@@ -263,7 +271,7 @@ def backtest(inv: pd.DataFrame, bank: pd.DataFrame, opening_balance: float, as_o
     inv_c.loc[later, "paid_date"] = pd.NaT
     bank_c = bank[bank["txn_date"] <= c]
     cash_c = opening_balance + float(bank_c["amount"].sum())
-    fc = run_forecast(inv_c, bank_c, cutoff, cash_c, n_sims, seed)
+    fc = run_forecast(inv_c, bank_c, cutoff, cash_c, n_sims, seed, exclude_ids, learn_exclude_ids)
 
     actual = bank[(bank["txn_date"] > c) & (bank["txn_date"] <= c + pd.Timedelta(days=HORIZON_DAYS))]
     wk = ((actual["txn_date"] - c).dt.days - 1) // 7
