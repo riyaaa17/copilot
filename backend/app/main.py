@@ -3,10 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import analytics, anomalies, collections, forecast, ingest, reports
+
 from app.config import get_settings
 from app.db import init_db
-
+from app.api import analytics, anomalies, chat, collections, forecast, ingest, reports
 settings = get_settings()
 
 
@@ -29,6 +29,7 @@ app.include_router(forecast.router)
 app.include_router(anomalies.router)
 app.include_router(collections.router)
 app.include_router(reports.router)
+app.include_router(chat.router)
 @app.get("/health")
 def health() -> dict:
     return {
