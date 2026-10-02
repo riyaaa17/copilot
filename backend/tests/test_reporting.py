@@ -139,6 +139,40 @@ def test_figures_followed_by_punctuation_are_matched_correctly():
     n = dict(summary="It ends at $750,000, down 16.7%. Then $750,000.", variance_commentary="ok ($750,000)")
     assert rep.check_narrative(facts, n) == []
 
+def test_cash_described_as_down_from_the_forecast_is_rejected():
+    # the real mistake a model made: every figure correct, meaning backwards
+    n = dict(summary="Cash on hand is $896,868, down from the 13-week base case forecast of $747,935, "
+                     "a 16.6% decline.", variance_commentary="ok")
+    facts = json.dumps({"a": "$896,868", "b": "$747,935", "c": "16.6%"})
+    assert any("moving from the forecast" in p for p in rep.check_narrative(facts, n))
+
+
+def test_correct_direction_is_accepted():
+    n = dict(summary="Cash is $896,868 today and is forecast to fall to $747,935 by week 13, "
+                     "16.6% lower.", variance_commentary="ok")
+    facts = json.dumps({"a": "$896,868", "b": "$747,935", "c": "16.6%"})
+    assert rep.check_narrative(facts, n) == []
+
+
+def test_day_and_week_figures_are_verified_too():
+    facts = json.dumps({"dso": "45.3 days", "move": "-10.4 days", "low": "week 9"})
+    ok = dict(summary="DSO is 45.3 days, down 10.4 days, with the low in week 9.", variance_commentary="ok")
+    bad = dict(summary="DSO is 47 days and the low is in week 7.", variance_commentary="ok")
+    assert rep.check_narrative(facts, ok) == []
+    problems = rep.check_narrative(facts, bad)
+    assert any("47day" in p for p in problems) and any("week7" in p for p in problems)
+
+
+def test_ready_made_sentences_are_correctly_worded():
+    s = rep.narrative_facts(sample_data())["ready_made_sentences"]
+    assert "lower than today's cash" in s["outlook"] and "$750,000" in s["outlook"]
+
+
+def test_ai_written_wording_is_labelled():
+    d = sample_data()
+    n = rep.template_narrative(rep.narrative_facts(d))
+    assert "written by an AI assistant" in rep.render_markdown(d, n, "llm")
+    assert "written by an AI assistant" not in rep.render_markdown(d, n, "template")
 
 def test_narrative_with_a_computed_sum_fails():
     n = dict(summary="Cash is $896,868 and $12,001 short.", variance_commentary="ok")

@@ -14,7 +14,15 @@ from app.tools import analytics as an
 from app.tools.forecast import INVOICE_CATEGORIES
 
 BUFFER_RATIO = 0.5  # flag a cash dip when the downside (P10) low is below half of today's cash
-NUM_TOKEN = re.compile(r"-?\$\s?\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?%")
+NUM_TOKEN = re.compile(
+    r"-?\$\s?\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?%|\d+(?:\.\d+)?\s+days?\b"
+    r"|\bweeks?\s+\d+\b|\b\d+\s+weeks?\b", re.IGNORECASE)
+ALWAYS_OK = {"13week", "week13", "30day", "60day", "90day", "7day"}  # fixed horizon and aging labels
+# "cash ... down from the forecast": today's cash is a balance, the forecast is a projection
+REVERSED = re.compile(
+    r"\b(cash|balance)\b[^.;]{0,60}\b(down|up|fell|dropped|declined|decreased|rose|increased)\b"
+    r"(?:\s+(?:by\s+)?[\d.,%$]+)?\s+from\b[^.;]{0,40}\b(forecast|base[\s-]?case|projection|projected)\b",
+    re.IGNORECASE)
 SOURCES = ("/api/forecast, /api/analytics/kpis, /api/analytics/aging, /api/collections/priorities, "
            "/api/anomalies")
 
@@ -151,29 +159,38 @@ def narrative_facts(data: dict) -> dict:
     k, kp, f, c = data["kpis"], data["kpis_prev"], data["forecast"], data["collections"]
     net = next(v for v in data["variance"] if v["name"] == "Net cash flow")
     dso_move = None if k["dso"] is None or kp["dso"] is None else round(k["dso"] - kp["dso"], 1)
+    lower = "lower" if f["change_pct"] < 0 else "higher"
     return dict(
         week_ending=data["as_of"],
+        ready_made_sentences=dict(
+            outlook=(f"The base-case forecast for week 13 is {money(f['closing_p50_week13'])}, which is "
+                     f"{pct(abs(f['change_pct']))} {lower} than today's cash of {money(k['cash'])}."),
+            downside=(f"In the downside case cash could fall to {money(f['lowest_p10_balance'])} in "
+                      f"week {f['lowest_p10_week']}.")),
         cash_today=money(k["cash"]),
         cash_change_vs_last_week=money(k["cash"] - kp["cash"]),
         forecast_week13_base_case=money(f["closing_p50_week13"]),
         forecast_direction_vs_today="down" if f["change_pct"] < 0 else "up",
         forecast_change_vs_today=pct(abs(f["change_pct"])),
         downside_low_point=money(f["lowest_p10_balance"]),
-        downside_low_point_week=f["lowest_p10_week"],
+        downside_low_point_week=f"week {f['lowest_p10_week']}",
         chance_cash_goes_negative=pct(f["prob_negative_cash_pct"]),
         overdue_receivables=money(k["overdue_ar"]),
         overdue_share_of_open_receivables=pct(k["overdue_pct"]),
         receivables_over_90_days=money(k["ar_90_plus"]),
         receivables_unlikely_to_be_collected_in_13_weeks=money(c["at_risk_amount"]),
-        dso_days=k["dso"], dso_change_vs_last_week_days=dso_move,
+        dso=None if k["dso"] is None else f"{k['dso']:.1f} days",
+        dso_change_vs_last_week=None if dso_move is None else f"{dso_move:+.1f} days",
         last_week_vs_forecast=dict(
             forecast_net_cash_flow=money(net["forecast"]), actual_net_cash_flow=money(net["actual"]),
             variance=money(net["variance"]),
             lines=[dict(name=v["name"], forecast=money(v["forecast"]), actual=money(v["actual"]),
                         variance=money(v["variance"])) for v in data["variance"][:-1]]),
         largest_net_outflow_week=(
-            dict(week=data["outflow_weeks"][0]["week"], net=money(data["outflow_weeks"][0]["net"]))
+            dict(week=f"week {data['outflow_weeks'][0]['week']}",
+                 net=money(data["outflow_weeks"][0]["net"]))
             if data["outflow_weeks"] else None))
+    
 
 
 def template_narrative(facts: dict) -> dict:
@@ -181,7 +198,7 @@ def template_narrative(facts: dict) -> dict:
     summary = (f"Cash today is {facts['cash_today']}. The base-case forecast ends week 13 at "
                f"{facts['forecast_week13_base_case']}, {facts['forecast_direction_vs_today']} "
                f"{facts['forecast_change_vs_today']} from today; in the downside case cash falls to "
-               f"{facts['downside_low_point']} in week {facts['downside_low_point_week']}, with a "
+               f"{facts['downside_low_point']} in {facts['downside_low_point_week']}, with a "
                f"{facts['chance_cash_goes_negative']} chance of going negative. Overdue receivables are "
                f"{facts['overdue_receivables']} ({facts['overdue_share_of_open_receivables']} of open "
                f"receivables), of which {facts['receivables_over_90_days']} is more than 90 days late. "
@@ -196,12 +213,17 @@ def template_narrative(facts: dict) -> dict:
 
 
 def _tokens(text: str) -> set[str]:
-    return {t.replace("-", "").replace(" ", "") for t in NUM_TOKEN.findall(text)}
+    out = set()
+    for t in NUM_TOKEN.findall(text):
+        t = re.sub(r"\s+|-", "", t.lower())
+        out.add(re.sub(r"(day|week)s$", r"\1", t))   # '10.4 days' and '10.4 day' are the same figure
+    return out
 
 
 def check_narrative(facts_text: str, narrative: dict) -> list[str]:
-    """Reject any dollar amount or percentage that was not in the supplied facts."""
-    allowed, problems = _tokens(facts_text), []
+    """Reject figures (dollars, percentages, days, weeks) not in the supplied facts, and the
+    known mix-up of describing today's cash as moving 'from' a forecast."""
+    allowed, problems = _tokens(facts_text) | ALWAYS_OK, []
     for key in ("summary", "variance_commentary"):
         text = narrative.get(key, "")
         if not text.strip():
@@ -209,6 +231,9 @@ def check_narrative(facts_text: str, narrative: dict) -> list[str]:
             continue
         for tok in sorted(_tokens(text) - allowed):
             problems.append(f"{key}: figure {tok} is not in the supplied facts")
+        if REVERSED.search(text):
+            problems.append(f"{key}: describes today's cash as moving from the forecast; the forecast "
+                            f"is a projection of the future, not a starting point")
         if re.search(r"\$\s?[\d.,]+\s?[kKmMbB]\b", text):
             problems.append(f"{key}: abbreviated amount; exact figures are required")
         if len(text.split()) > 200:
@@ -217,10 +242,13 @@ def check_narrative(facts_text: str, narrative: dict) -> list[str]:
 
 
 # ---------- the document ----------
-def render_markdown(data: dict, narrative: dict) -> str:
+def render_markdown(data: dict, narrative: dict, source: str = "template") -> str:
     k, kp, f, c, a = (data["kpis"], data["kpis_prev"], data["forecast"], data["collections"],
                       data["anomalies"])
-    L = [f"# Weekly CFO Briefing - week ending {data['as_of']}", "", "## Summary", "",
+    ai_note = ["_Wording written by an AI assistant from the figures in this report; every dollar "
+               "amount, percentage, day and week count was checked against them._", ""] \
+        if source == "llm" else []
+    L = [f"# Weekly CFO Briefing - week ending {data['as_of']}", "", "## Summary", "", *ai_note,
          narrative["summary"], "", "## Key numbers", "",
          "| Metric | Now | Last week | Change |", "|---|---|---|---|",
          f"| Cash balance | {money(k['cash'])} | {money(kp['cash'])} | {signed_money(k['cash'] - kp['cash'])} |",

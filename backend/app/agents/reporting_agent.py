@@ -20,9 +20,12 @@ LLMFn = Callable[[str, str], str]
 
 SYSTEM_PROMPT = """You are a finance analyst writing two short paragraphs for a weekly CFO briefing.
 Rules:
-- Use ONLY the facts in the JSON. Copy every dollar amount and percentage EXACTLY as written there
-  (for example "$747,934" or "10.3%"). Never round, abbreviate (no "k" or "M"), convert, add up,
-  or invent a figure. If you are unsure about a number, leave it out.
+- Use ONLY the facts in the JSON. Copy every dollar amount, percentage, day count and week number
+  EXACTLY as written there (for example "$747,934", "10.3%", "45.3 days", "week 9"). Never round,
+  abbreviate (no "k" or "M"), convert, add up, or invent a figure. If unsure about a number, leave it out.
+- cash_today is the balance right now. forecast_week13_base_case is a PROJECTION of the future. Say what
+  the forecast predicts ("is forecast to fall to ..."). Never say today's cash is "down from" a forecast.
+- Reuse the wording in ready_made_sentences where it fits.
 - Plain English a non-finance reader can follow. No markdown, no bullet points, no jargon.
 - Be direct about risk and about good news. Do not give advice; actions are handled separately.
 Respond with ONLY a JSON object:
@@ -148,7 +151,7 @@ def generate_briefing(session: Session, use_llm: bool = True, llm_fn: LLMFn | No
         llm_fn = smart_llm()
     narrative, source, warnings = narrate(rep.narrative_facts(data), llm_fn)
     briefing = Briefing(as_of=pd.Timestamp(data["as_of"]).date(),
-                        markdown=rep.render_markdown(data, narrative),
+                        markdown=rep.render_markdown(data, narrative, source),
                         data_json=json.dumps(data, default=float), source=source, warnings=warnings)
     session.add(briefing)
     session.commit()
