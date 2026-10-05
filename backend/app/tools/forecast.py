@@ -23,6 +23,17 @@ SMOOTH_K = 5  # pseudo-count: how quickly we trust a customer's own history over
 INVOICE_CATEGORIES = {"customer_receipt", "vendor_payment"}
 
 
+@dataclass(frozen=True)
+class Scenario:
+    """Changes applied on top of the baseline forecast (what-if analysis). The defaults mean 'no change'."""
+    pay_in_weeks: tuple[tuple[int, int], ...] = ()          # (counterparty_id, week): overdue invoices paid that week
+    fail_customers: frozenset = frozenset()                 # open invoices never collected, no new billings
+    ar_shift_days: int = 0                                  # every customer pays this many days later (negative = earlier)
+    ap_shift_days: int = 0                                  # we pay vendors this many days later
+    recurring_shift_days: tuple[tuple[str, int], ...] = ()  # (category, days): move a payroll/rent/tax payment
+    one_offs: tuple[tuple[int, float, str], ...] = ()       # (week, amount, label): amount > 0 is cash in
+
+
 # ---------- loaders ----------
 def load_bank(session: Session) -> pd.DataFrame:
     rows = [dict(txn_date=r.txn_date, amount=r.amount, category=r.category)
@@ -94,7 +105,21 @@ def _weeks(offset_days: np.ndarray) -> np.ndarray:
 
 
 # ---------- simulation of each driver ----------
-def _simulate_open(rng, inv, kind, as_of, S, per, port):
+def _apply_scenario_to_open(offset, kind, cid, overdue, sc):
+    """Shift payment timing first, then apply firm per-customer assumptions on top."""
+    shift = sc.ar_shift_days if kind == "AR" else sc.ap_shift_days
+    if shift:
+        offset = np.where(np.isfinite(offset), np.maximum(offset + shift, 1.0), offset)
+    if kind == "AR":
+        if cid in sc.fail_customers:
+            return np.full_like(offset, np.inf)
+        week = dict(sc.pay_in_weeks).get(cid)
+        if week is not None and overdue > 0:
+            return np.full_like(offset, 7.0 * week - 3)   # a day in the middle of that week
+    return offset
+
+
+def _simulate_open(rng, inv, kind, as_of, S, per, port, scenario=None):
     asof = pd.Timestamp(as_of)
     flows = np.zeros((S, HORIZON_WEEKS))
     sims = np.arange(S)
@@ -108,6 +133,8 @@ def _simulate_open(rng, inv, kind, as_of, S, per, port):
             offset = rng.choice(dist[0], size=S, p=dist[1]) - overdue  # days from today
             if kind == "AP":  # we owe it: never assume a bill quietly disappears
                 offset = np.where(np.isinf(offset), 1.0, offset)
+        if scenario is not None:   # the random draw above always happens, so scenario and baseline stay comparable
+            offset = _apply_scenario_to_open(offset, kind, int(r.counterparty_id), overdue, scenario)
         wk = _weeks(offset)
         ok = (wk >= 1) & (wk <= HORIZON_WEEKS)
         np.add.at(flows, (sims[ok], wk[ok].astype(int) - 1), r.amount)
@@ -122,7 +149,7 @@ def _simulate_open(rng, inv, kind, as_of, S, per, port):
     return flows, pd.DataFrame(recs, columns=cols)
 
 
-def _simulate_new(rng, inv, kind, as_of, S, per, port, lookback=365):
+def _simulate_new(rng, inv, kind, as_of, S, per, port, lookback=365, scenario=None):
     """Invoices that don't exist yet: rate, size and terms learned from each counterparty."""
     asof = pd.Timestamp(as_of)
     hist = inv[(inv["type"] == kind) & (inv["status"] != "void")
@@ -143,13 +170,19 @@ def _simulate_new(rng, inv, kind, as_of, S, per, port, lookback=365):
         amounts = rng.choice(g["amount"].to_numpy(), total)
         terms = float((g["due_date"] - g["issue_date"]).dt.days.median())
         pay_off = issue_off + terms + rng.choice(dist[0], size=total, p=dist[1])
+        if scenario is not None:
+            if kind == "AR" and int(cid) in scenario.fail_customers:
+                continue   # every draw above was still made, so the other customers stay comparable
+            shift = scenario.ar_shift_days if kind == "AR" else scenario.ap_shift_days
+            if shift:
+                pay_off = np.maximum(pay_off + shift, issue_off + 1)
         wk = _weeks(pay_off)
         ok = (wk >= 1) & (wk <= HORIZON_WEEKS)
         np.add.at(flows, (sims[ok], wk[ok].astype(int) - 1), amounts[ok])
     return flows
 
 
-def _simulate_recurring(rng, bank, as_of, S) -> dict[str, np.ndarray]:
+def _simulate_recurring(rng, bank, as_of, S, shift_days=None) -> dict[str, np.ndarray]:
     """Payroll, rent, tax, fees: cadence, day-of-month and size learned from bank history."""
     asof = pd.Timestamp(as_of)
     horizon_end = asof + pd.Timedelta(days=HORIZON_DAYS)
@@ -166,18 +199,23 @@ def _simulate_recurring(rng, bank, as_of, S) -> dict[str, np.ndarray]:
         mean = float(amts[-3:].mean())
         sd = float(amts.std(ddof=1)) if len(amts) >= 3 else abs(mean) * 0.05
         arr = np.zeros((S, HORIZON_WEEKS))
+        shift = pd.Timedelta(days=int((shift_days or {}).get(cat, 0)))
         period = dates.iloc[-1].to_period("M")
         while True:
             period = period + step
             d = (period.end_time.normalize() if month_end else
                  pd.Timestamp(year=period.year, month=period.month,
                               day=min(dom, period.days_in_month)))
-            if d > horizon_end:
+            d2 = d + shift   # when the payment actually happens in this scenario
+            if d > horizon_end and d2 > horizon_end:
                 break
-            if d > asof:
-                k = (int((d - asof).days) - 1) // 7
-                draw = rng.normal(mean, sd, S)
-                arr[:, k] += np.minimum(draw, 0) if mean < 0 else np.maximum(draw, 0)
+            in_base = asof < d <= horizon_end
+            in_alt = asof < d2 <= horizon_end
+            if in_base or in_alt:
+                draw = rng.normal(mean, sd, S)   # drawn whenever the baseline draws, to keep the streams aligned
+                if in_alt:
+                    k = (int((d2 - asof).days) - 1) // 7
+                    arr[:, k] += np.minimum(draw, 0) if mean < 0 else np.maximum(draw, 0)
         if arr.any():
             out[f"Recurring: {cat}"] = arr
     return out
@@ -202,7 +240,7 @@ class Forecast:
 
 def run_forecast(inv: pd.DataFrame, bank: pd.DataFrame, as_of: date, opening_cash: float,
                  n_sims: int = 1000, seed: int = 42, exclude_ids=frozenset(),
-                 learn_exclude_ids=frozenset()) -> Forecast:
+                 learn_exclude_ids=frozenset(), scenario: Scenario | None = None) -> Forecast:
     """exclude_ids: invoices that are not real (duplicates); removed everywhere.
     learn_exclude_ids: suspicious but possibly real (outliers); they stay in open receivables
     and payables, but are not used to learn typical invoice sizes for future billings."""
@@ -213,16 +251,22 @@ def run_forecast(inv: pd.DataFrame, bank: pd.DataFrame, as_of: date, opening_cas
 
     per_ar, port_ar = _build_dists(inv, "AR", as_of)
     per_ap, port_ap = _build_dists(inv, "AP", as_of)
-    ar_open, open_ar = _simulate_open(rng, inv, "AR", as_of, S, per_ar, port_ar)
-    ap_open, _ = _simulate_open(rng, inv, "AP", as_of, S, per_ap, port_ap)
+    ar_open, open_ar = _simulate_open(rng, inv, "AR", as_of, S, per_ar, port_ar, scenario)
+    ap_open, _ = _simulate_open(rng, inv, "AP", as_of, S, per_ap, port_ap, scenario)
 
     comps: dict[str, np.ndarray] = {
         "Collections: open invoices": ar_open,
-        "Collections: new billings": _simulate_new(rng, learn, "AR", as_of, S, per_ar, port_ar),
+        "Collections: new billings": _simulate_new(rng, learn, "AR", as_of, S, per_ar, port_ar, scenario=scenario),
         "Vendor payments: open bills": -ap_open,
-        "Vendor payments: new bills": -_simulate_new(rng, learn, "AP", as_of, S, per_ap, port_ap),
+        "Vendor payments: new bills": -_simulate_new(rng, learn, "AP", as_of, S, per_ap, port_ap, scenario=scenario),
     }
-    comps.update(_simulate_recurring(rng, bank, as_of, S))
+    comps.update(_simulate_recurring(rng, bank, as_of, S,
+                                     dict(scenario.recurring_shift_days) if scenario else None))
+    if scenario is not None:
+        for i, (week, amount, label) in enumerate(scenario.one_offs):
+            arr = np.zeros((S, HORIZON_WEEKS))
+            arr[:, week - 1] = amount
+            comps[f"One-off: {label}" + (f" ({i + 1})" if f"One-off: {label}" in comps else "")] = arr
 
     net = sum(comps.values())
     balance = opening_cash + np.cumsum(net, axis=1)
@@ -236,8 +280,8 @@ def run_forecast(inv: pd.DataFrame, bank: pd.DataFrame, as_of: date, opening_cas
             start=(as_of + timedelta(days=7 * k + 1)).isoformat(),
             end=(as_of + timedelta(days=7 * k + 7)).isoformat(),
             drivers=parts,
-            inflows=round(sum(v for n, v in parts.items() if n.startswith("Collections")), 2),
-            outflows=round(sum(v for n, v in parts.items() if not n.startswith("Collections")), 2),
+            inflows=round(sum(v for n, v in parts.items() if n.startswith("Collections") or v > 0), 2),
+            outflows=round(sum(v for n, v in parts.items() if not (n.startswith("Collections") or v > 0)), 2),
             net=round(sum(parts.values()), 2),
             closing_p10=round(float(p10[k]), 2), closing_p50=round(float(p50[k]), 2),
             closing_p90=round(float(p90[k]), 2)))

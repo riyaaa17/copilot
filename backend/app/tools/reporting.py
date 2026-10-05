@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from datetime import timedelta
-
+from decimal import ROUND_HALF_UP, Decimal
 import pandas as pd
 
 from app.tools import analytics as an
@@ -28,14 +28,21 @@ SOURCES = ("/api/forecast, /api/analytics/kpis, /api/analytics/aging, /api/colle
 
 
 # ---------- formatting ----------
+def _whole(x) -> int:
+    """Whole dollars, rounding halves up like the browser does, so the API and the dashboard
+    never disagree by a dollar (Python's round() rounds halves to even)."""
+    return int(Decimal(repr(abs(float(x)))).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
 def money(x) -> str:
     x = float(x)
-    return f"{'-' if round(x) < 0 else ''}${abs(round(x)):,.0f}"
+    n = _whole(x)
+    return f"{'-' if x < 0 and n else ''}${n:,}"
 
 
 def signed_money(x) -> str:
     x = float(x)
-    return ("+" if round(x) > 0 else "") + money(x)
+    return ("+" if x > 0 and _whole(x) else "") + money(x)
 
 
 def pct(x) -> str:

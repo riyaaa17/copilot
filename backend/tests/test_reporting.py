@@ -47,7 +47,10 @@ def test_money_formatting():
     assert rep.signed_money(5) == "+$5" and rep.signed_money(-5) == "-$5"
     assert rep.pct(10.26) == "10.3%"
 
-
+def test_money_rounds_halves_up_like_the_browser():
+    assert rep.money(55794.5) == "$55,795" and rep.money(0.5) == "$1" and rep.money(2.5) == "$3"
+    assert rep.money(-2.5) == "-$3" and rep.money(-0.4) == "$0" and rep.money(1234567.49) == "$1,234,567"
+    assert rep.signed_money(55794.5) == "+$55,795" and rep.signed_money(0.2) == "$0"
 # ---------- rewind ----------
 def test_rewind_undoes_later_payments_and_drops_later_invoices():
     inv = pd.DataFrame(dict(

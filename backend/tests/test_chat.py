@@ -68,7 +68,11 @@ def test_unique_match_is_returned():
 def test_lookalike_customers_are_never_guessed_between():
     assert {n for _, n in ct.match_customer("ironwood", NAMES)} == {"Ironwood Industries", "Ironwood Group"}
 
-
+def test_matching_ignores_case_so_lowercase_queries_work():
+    names = {1: "Acme Corp", 2: "Acme Labs", 3: "Zenith"}
+    assert {n for _, n in ct.match_customer("acme", names)} == {"Acme Corp", "Acme Labs"}
+    assert ct.match_customer("ZENITH", names) == [(3, "Zenith")]
+    assert ct.match_customer("acme corp", names) == [(1, "Acme Corp")]
 def test_no_match_gives_empty_list():
     assert ct.match_customer("zzzzqq", NAMES) == [] and ct.match_customer("  ", NAMES) == []
 

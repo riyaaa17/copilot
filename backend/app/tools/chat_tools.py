@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 
 import numpy as np
-from rapidfuzz import fuzz, process
+from rapidfuzz import fuzz, process, utils
 
 from app.tools import reporting as rep
 from app.tools.forecast import HORIZON_WEEKS
@@ -86,7 +86,9 @@ def match_customer(query: str, names: dict[int, str], threshold: int = 70,
     """
     if not names or not query.strip():
         return []
-    ranked = process.extract(query, names, scorer=fuzz.WRatio, limit=5)  # [(name, score, id), ...]
+        # default_process ignores case and punctuation, so 'acme' finds 'Acme Corp'
+    ranked = process.extract(query, names, scorer=fuzz.WRatio, processor=utils.default_process,
+                             limit=5)  # [(name, score, id), ...]
     if not ranked or ranked[0][1] < threshold:
         return []
     cutoff = max(threshold, ranked[0][1] - tie_margin)
