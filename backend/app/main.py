@@ -8,7 +8,15 @@ from app.config import get_settings
 from app.db import init_db
 from app.api import analytics, anomalies, chat, collections, forecast, ingest, reports, whatif
 settings = get_settings()
+from fastapi.middleware.cors import CORSMiddleware
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://copilot-frontend.vercel.app", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
