@@ -11,9 +11,9 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(BASE + path, { headers: { "Content-Type": "application/json" }, ...init });
+    res = await fetch(API_BASE_URL + path, { headers: { "Content-Type": "application/json" }, ...init });
   } catch {
-    throw new ApiError(0, `Can't reach the API at ${BASE}. Check that the backend is running.`);
+    throw new ApiError(0, `Can't reach the API at ${API_BASE_URL}. Check that the backend is running.`);
   }
   if (!res.ok) {
     let detail = res.statusText;
