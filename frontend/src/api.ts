@@ -1,27 +1,33 @@
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-
-export async function apiRequest(endpoint: string, options: RequestInit = {}) {
-  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const url = `${API_BASE_URL}${cleanEndpoint}`;
-
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API Error (${response.status}): ${errorText || response.statusText}`);
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
   }
-
-  // Parse JSON if response has content, otherwise return null
-  const text = await response.text();
-  return text ? JSON.parse(text) : null;
 }
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, { headers: { "Content-Type": "application/json" }, ...init });
+  } catch {
+    throw new ApiError(0, `Can't reach the API at ${BASE}. Check that the backend is running.`);
+  }
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
+    } catch {
+      /* keep the status text */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return (await res.json()) as T;
+}
+
 // ---------- types (they mirror the backend's JSON) ----------
 export interface IngestSummary {
   counterparties: number;
