@@ -23,6 +23,17 @@ settings = get_settings()
 async def lifespan(_: FastAPI):
     init_db()
     yield
+
+
+# Create the FastAPI application FIRST
+app = FastAPI(
+    title=settings.app_name,
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+
+# Configure CORS AFTER creating the app
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,9 +43,7 @@ app.add_middleware(
 )
 
 
-
-
-
+# Register API routers
 app.include_router(ingest.router)
 app.include_router(analytics.router)
 app.include_router(forecast.router)
