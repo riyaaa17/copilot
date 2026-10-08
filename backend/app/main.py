@@ -33,7 +33,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://copilot-c0a2k6i7i-riyas-projects-e3a657d1.vercel.app",
+        "https://copilot-5rl43sf3b-riyas-projects-e3a657d1.vercel.app",
         "http://localhost:5173",
     ],
     allow_credentials=True,
