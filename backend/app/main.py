@@ -30,18 +30,17 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://copilot-frontend.vercel.app",
+        "https://copilot-c0a2k6i7i-riyas-projects-e3a657d1.vercel.app",
         "http://localhost:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 app.include_router(ingest.router)
