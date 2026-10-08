@@ -1,36 +1,85 @@
-
-
 // src/api.ts
 
-// Automatically pulls VITE_API_BASE_URL from your Vercel environment settings,
-// or defaults to localhost during local development.
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+// Uses Vercel's VITE_API_BASE_URL in production.
+// Falls back to the local FastAPI backend during development.
+export const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8002"
+).replace(/\/+$/, "");
 
 /**
- * Universal helper function for making API requests across your views and components.
+ * Generic API request helper.
+ * The generic <T> tells TypeScript what JSON type the backend returns.
  */
-export async function apiRequest(endpoint: string, options: RequestInit = {}) {
-  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+export async function apiRequest<T>(
+  endpoint: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const url = `${API_BASE_URL}${cleanEndpoint}`;
+
+  const headers = new Headers(options.headers);
+
+  // Only send Content-Type when there is a request body.
+  // This avoids unnecessary CORS preflight requests for GET requests.
+  if (options.body != null && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
 
   const response = await fetch(url, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`API Error (${response.status}): ${errorText || response.statusText}`);
+    throw new Error(
+      `API Error (${response.status}): ${
+        errorText || response.statusText
+      }`,
+    );
   }
 
-  // Parse JSON if response has content, otherwise return null
   const text = await response.text();
-  return text ? JSON.parse(text) : null;
+
+  // Some endpoints may return an empty response.
+  if (!text) {
+    return undefined as T;
+  }
+
+  return JSON.parse(text) as T;
 }
-// ---------- types (they mirror the backend's JSON) ----------
+
+/**
+ * Typed alias used by all API methods below.
+ */
+const request = <T>(
+  endpoint: string,
+  options: RequestInit = {},
+): Promise<T> => {
+  return apiRequest<T>(endpoint, options);
+};
+
+/**
+ * POST helper.
+ */
+const post = <T>(
+  path: string,
+  body?: unknown,
+): Promise<T> => {
+  return request<T>(path, {
+    method: "POST",
+    body:
+      body === undefined
+        ? undefined
+        : JSON.stringify(body),
+  });
+};
+
+
+// ============================================================
+// TYPES
+// ============================================================
+
 export interface IngestSummary {
   counterparties: number;
   invoices: number;
@@ -136,7 +185,11 @@ export interface Priorities {
   held: HeldInvoice[];
 }
 
-export type DraftStatus = "draft" | "approved" | "rejected" | "sent";
+export type DraftStatus =
+  | "draft"
+  | "approved"
+  | "rejected"
+  | "sent";
 
 export interface Draft {
   draft_id: number;
@@ -158,10 +211,16 @@ export interface DraftBatch {
   as_of: string;
   llm_used: boolean;
   created: Draft[];
-  skipped: { customer: string; reason: string }[];
+  skipped: {
+    customer: string;
+    reason: string;
+  }[];
 }
 
-export type FlagStatus = "open" | "confirmed" | "dismissed";
+export type FlagStatus =
+  | "open"
+  | "confirmed"
+  | "dismissed";
 
 export interface Flag {
   flag_id: number;
@@ -201,18 +260,50 @@ export interface ChatReply {
   source: "llm" | "fallback";
   verified: boolean;
   warnings: string[];
-  trace: { tool: string; arguments: Record<string, unknown>; ok: boolean }[];
+  trace: {
+    tool: string;
+    arguments: Record<string, unknown>;
+    ok: boolean;
+  }[];
 }
+
 export type Effect =
-  | { type: "customer_pays"; counterparty_id: number; weeks: number }
-  | { type: "customer_fails"; counterparty_id: number }
-  | { type: "customers_pay_later"; days: number }
-  | { type: "vendors_paid_later"; days: number }
-  | { type: "shift_recurring"; category: string; days: number }
-  | { type: "one_off"; week: number; amount: number; description: string };
+  | {
+      type: "customer_pays";
+      counterparty_id: number;
+      weeks: number;
+    }
+  | {
+      type: "customer_fails";
+      counterparty_id: number;
+    }
+  | {
+      type: "customers_pay_later";
+      days: number;
+    }
+  | {
+      type: "vendors_paid_later";
+      days: number;
+    }
+  | {
+      type: "shift_recurring";
+      category: string;
+      days: number;
+    }
+  | {
+      type: "one_off";
+      week: number;
+      amount: number;
+      description: string;
+    };
 
 export interface WhatIfOptions {
-  customers: { id: number; name: string; open: number; overdue: number }[];
+  customers: {
+    id: number;
+    name: string;
+    open: number;
+    overdue: number;
+  }[];
   recurring_categories: string[];
 }
 
@@ -223,7 +314,11 @@ export interface WhatIfResult {
   headline: {
     cash_today: number;
     verdict: "better" | "worse" | "about the same";
-    week13: { baseline: number; scenario: number; difference: number };
+    week13: {
+      baseline: number;
+      scenario: number;
+      difference: number;
+    };
     lowest_downside: {
       baseline: number;
       baseline_week: number;
@@ -231,8 +326,14 @@ export interface WhatIfResult {
       scenario_week: number;
       difference: number;
     };
-    chance_negative: { baseline: number; scenario: number };
-    receivables_at_risk: { baseline: number; scenario: number };
+    chance_negative: {
+      baseline: number;
+      scenario: number;
+    };
+    receivables_at_risk: {
+      baseline: number;
+      scenario: number;
+    };
   };
   weeks: {
     week: number;
@@ -244,41 +345,144 @@ export interface WhatIfResult {
     scenario_p90: number;
     difference: number;
   }[];
-  drivers: { driver: string; baseline: number; scenario: number; difference: number }[];
+  drivers: {
+    driver: string;
+    baseline: number;
+    scenario: number;
+    difference: number;
+  }[];
 }
-// ---------- calls ----------
-const post = <T>(path: string, body?: unknown) =>
-  request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
+
+
+// ============================================================
+// API
+// ============================================================
 
 export const api = {
-  summary: () => request<IngestSummary>("/api/ingest/summary"),
+
+  summary: (): Promise<IngestSummary> =>
+    request<IngestSummary>("/api/ingest/summary"),
+
   async loadSample(): Promise<void> {
     await post("/api/ingest/sample");
     await post("/api/anomalies/scan");
   },
-  kpis: () => request<Kpis>("/api/analytics/kpis"),
-  forecast: () => request<Forecast>("/api/forecast"),
-  aging: (kind: "AR" | "AP") => request<Aging>(`/api/analytics/aging?kind=${kind}`),
 
-  priorities: () => request<Priorities>("/api/collections/priorities"),
-  createDrafts: (top: number, useLlm: boolean) =>
-    post<DraftBatch>(`/api/collections/drafts?top=${top}&use_llm=${useLlm}`),
-  drafts: () => request<Draft[]>("/api/collections/drafts?status=all"),
-  editDraft: (id: number, subject: string, body: string) =>
-    request<Draft>(`/api/collections/drafts/${id}`, { method: "PUT", body: JSON.stringify({ subject, body }) }),
-  draftAction: (id: number, action: "approve" | "reject" | "mark-sent") =>
-    post<Draft>(`/api/collections/drafts/${id}/${action}`),
+  kpis: (): Promise<Kpis> =>
+    request<Kpis>("/api/analytics/kpis"),
 
-  scan: () => post<{ total: number; duplicates: number; outliers: number }>("/api/anomalies/scan"),
-  flags: (status: FlagStatus) => request<Flag[]>(`/api/anomalies?status=${status}`),
-  reviewFlag: (id: number, status: "confirmed" | "dismissed") =>
-    post<{ flag_id: number; status: string }>(`/api/anomalies/${id}/review?status=${status}`),
+  forecast: (): Promise<Forecast> =>
+    request<Forecast>("/api/forecast"),
 
-  reports: () => request<BriefingListItem[]>("/api/reports"),
-  report: (id: number) => request<Briefing>(`/api/reports/${id}`),
-  createReport: (useLlm: boolean) => post<Briefing>(`/api/reports/weekly?use_llm=${useLlm}`),
-  whatIfOptions: () => request<WhatIfOptions>("/api/whatif/options"),
-  whatIf: (effects: Effect[]) => post<WhatIfResult>("/api/whatif", { effects }),
-  chat: (message: string, history: ChatTurn[]) =>
-    post<ChatReply>("/api/chat", { message, history, use_llm: true }),
+  aging: (kind: "AR" | "AP"): Promise<Aging> =>
+    request<Aging>(
+      `/api/analytics/aging?kind=${kind}`,
+    ),
+
+  priorities: (): Promise<Priorities> =>
+    request<Priorities>("/api/collections/priorities"),
+
+  createDrafts: (
+    top: number,
+    useLlm: boolean,
+  ): Promise<DraftBatch> =>
+    post<DraftBatch>(
+      `/api/collections/drafts?top=${top}&use_llm=${useLlm}`,
+    ),
+
+  drafts: (): Promise<Draft[]> =>
+    request<Draft[]>(
+      "/api/collections/drafts?status=all",
+    ),
+
+  editDraft: (
+    id: number,
+    subject: string,
+    body: string,
+  ): Promise<Draft> =>
+    request<Draft>(
+      `/api/collections/drafts/${id}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          subject,
+          body,
+        }),
+      },
+    ),
+
+  draftAction: (
+    id: number,
+    action: "approve" | "reject" | "mark-sent",
+  ): Promise<Draft> =>
+    post<Draft>(
+      `/api/collections/drafts/${id}/${action}`,
+    ),
+
+  scan: (): Promise<{
+    total: number;
+    duplicates: number;
+    outliers: number;
+  }> =>
+    post<{
+      total: number;
+      duplicates: number;
+      outliers: number;
+    }>("/api/anomalies/scan"),
+
+  flags: (
+    status: FlagStatus,
+  ): Promise<Flag[]> =>
+    request<Flag[]>(
+      `/api/anomalies?status=${status}`,
+    ),
+
+  reviewFlag: (
+    id: number,
+    status: "confirmed" | "dismissed",
+  ): Promise<{
+    flag_id: number;
+    status: string;
+  }> =>
+    post<{
+      flag_id: number;
+      status: string;
+    }>(
+      `/api/anomalies/${id}/review?status=${status}`,
+    ),
+
+  reports: (): Promise<BriefingListItem[]> =>
+    request<BriefingListItem[]>("/api/reports"),
+
+  report: (
+    id: number,
+  ): Promise<Briefing> =>
+    request<Briefing>(`/api/reports/${id}`),
+
+  createReport: (
+    useLlm: boolean,
+  ): Promise<Briefing> =>
+    post<Briefing>(
+      `/api/reports/weekly?use_llm=${useLlm}`,
+    ),
+
+  whatIfOptions: (): Promise<WhatIfOptions> =>
+    request<WhatIfOptions>("/api/whatif/options"),
+
+  whatIf: (
+    effects: Effect[],
+  ): Promise<WhatIfResult> =>
+    post<WhatIfResult>("/api/whatif", {
+      effects,
+    }),
+
+  chat: (
+    message: string,
+    history: ChatTurn[],
+  ): Promise<ChatReply> =>
+    post<ChatReply>("/api/chat", {
+      message,
+      history,
+      use_llm: true,
+    }),
 };
