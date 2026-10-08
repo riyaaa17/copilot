@@ -2,9 +2,7 @@
 
 // Uses Vercel's VITE_API_BASE_URL in production.
 // Falls back to the local FastAPI backend during development.
-export const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8002"
-).replace(/\/+$/, "");
+export const API_BASE_URL = "https://copilot-backend-2kcl.onrender.com";
 
 /**
  * Generic API request helper.
