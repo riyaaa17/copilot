@@ -23,23 +23,15 @@ settings = get_settings()
 async def lifespan(_: FastAPI):
     init_db()
     yield
-
-
-app = FastAPI(
-    title=settings.app_name,
-    version="0.1.0",
-    lifespan=lifespan,
-)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://copilot-5rl43sf3b-riyas-projects-e3a657d1.vercel.app",
-        "http://localhost:5173",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 
 
 
