@@ -370,3 +370,7 @@ Design idea: a **ledger**. Negatives in red parentheses, totals under a double r
 | **Chat panel** | Suggested questions; history; provenance line under each answer; live agent trace and "How this was worked out" |
 
 Responsive: on screens narrower than about 1280 px the chat is an overlay and starts closed; on phones the navigation becomes a top bar. The dashboard talks to `http://localhost:8002` (override with `VITE_API_URL`). Open it at `localhost:5173`, not `127.0.0.1` (CORS allows only `localhost`).
+
+# DEPLOYMENT LINKS 
+BACKEND_URL=https://copilot-backend-2kcl.onrender.com/docs
+FRONTEND_URL=https://copilot-5rl43sf3b-riyas-projects-e3a657d1.vercel.app
